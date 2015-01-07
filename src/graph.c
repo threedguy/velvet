@@ -1944,7 +1944,7 @@ void sortGapMarkers(Graph * graph)
 	}
 }
 
-void exportGraph(char *filename, Graph * graph, TightString * sequences)
+void exportGraphSERIAL(char *filename, Graph * graph, TightString * sequences)
 {
 	IDnum index;
 	FILE *outfile;
@@ -2024,6 +2024,176 @@ void exportGraph(char *filename, Graph * graph, TightString * sequences)
 
 	fclose(outfile);
 }
+
+// pkr added exportGraphPARALLEL, which is a clone of exportGraph, with 
+//      Node, Arc,    output into a memstream buffer to prevent intermixed,garbled 
+//      output when running under the omp loop
+//      src/graph.c:2120: warning: unused variable ‘node’
+//      src/graph.c:2039: warning: unused variable ‘readIndex’
+//      src/graph.c:2039: warning: unused variable ‘readCount’
+//      src/graph.c:2038: warning: unused variable ‘reads’
+//      src/graph.c:2037: warning: unused variable ‘marker’
+//      src/graph.c:2036: warning: unused variable ‘arc’
+//      src/graph.c:2035: warning: unused variable ‘node’
+//
+void exportGraphPARALLEL(char *filename, Graph * graph, TightString * sequences)
+{
+        IDnum index;
+        FILE *outfile;
+
+        if (graph == NULL) {
+                return;
+        }
+
+        outfile = fopen(filename, "w");
+        if (outfile == NULL) {
+                velvetLog("Couldn't open file, sorry\n");
+                return;
+        } else
+                velvetLog("Writing into graph file %s...\n", filename);
+
+        // General data
+        velvetFprintf(outfile, "%li\t%li\t%i\t%i\n", (long) graph->nodeCount,
+                (long) graph->sequenceCount, graph->wordLength, (int) graph->double_stranded);
+
+        // Node info
+        #ifdef _OPENMP
+        #pragma omp parallel for
+        #endif
+        for (index = 1; index <= graph->nodeCount; index++) {
+                Node *node;
+                char* buf = NULL; size_t bufsize = 0; FILE* mystream;
+                if(bufsize == 0) mystream = open_memstream(&buf,&bufsize);
+                node = getNodeInGraph(graph, index);
+                exportNode(mystream, node, (void *) sequences);
+                {  
+                    fclose (mystream); 
+                    if (bufsize > 0) { 
+                       fprintf(outfile,"%s", buf); 
+                    } 
+                    bufsize = 0; 
+                    free(buf); 
+                }
+        }
+
+        // Arc info
+        #ifdef _OPENMP
+        #pragma omp parallel for
+        #endif
+        for (index = 1; index <= graph->nodeCount; index++) {
+                Node *node;
+                node = getNodeInGraph(graph, index);
+                if (node != NULL) {
+                   Arc *arc;
+                   char* buf = NULL;
+                   size_t bufsize = 0; FILE* mystream;
+                   if(bufsize == 0)  mystream = open_memstream(&buf,&bufsize);
+
+                   sortNodeArcs(node);
+                   sortNodeArcs(getTwinNode(node));
+
+                   for (arc = node->arc; arc != NULL; arc = arc->next)
+                        exportArc(mystream, arc);
+                   for (arc = node->twinNode->arc; arc != NULL; arc = arc->next)
+                        exportArc(mystream, arc);
+                   { 
+                       fclose (mystream); 
+                       if (bufsize > 0) { 
+                          fprintf(outfile,"%s", buf); 
+                       } 
+                       bufsize = 0; 
+                       free(buf); 
+                   }
+                }
+        }
+
+        // Sequence info
+        #ifdef _OPENMP
+        #pragma omp parallel for
+        #endif
+        for (index = 1; index <= graph->nodeCount; index++) {
+                Node *node;
+                node = getNodeInGraph(graph, index);
+                if (node != NULL) {
+                   PassageMarkerI marker;
+                   char* buf = NULL; size_t bufsize = 0; FILE* mystream;
+                   if(bufsize == 0)  mystream = open_memstream(&buf,&bufsize);
+
+                   for (marker = node->marker; marker != NULL_IDX;
+                        marker = getNextInNode(marker))
+                           exportMarker(mystream, marker, sequences,
+                                     graph->wordLength);
+                   { 
+                       fclose (mystream); 
+                       if (bufsize > 0) { 
+                          fprintf(outfile,"%s", buf); 
+                       } 
+                       bufsize = 0; 
+                       free(buf); 
+                   }
+                }
+        }
+
+        // Node reads
+        if (readStartsAreActivated(graph)) {
+                #ifdef _OPENMP
+                #pragma omp parallel for
+                #endif
+                for (index = 0; index <= graph->nodeCount * 2; index++) {
+                        IDnum readCount, readIndex;
+                        ShortReadMarker *reads;
+
+                        char* buf = NULL; size_t bufsize = 0; FILE* mystream;
+                        if(bufsize == 0)  mystream = open_memstream(&buf,&bufsize);
+
+                        readCount = graph->nodeReadCounts[index];
+                        if (readCount != 0) {
+
+                           velvetFprintf(mystream, "NR\t%li\t%li\n",
+                                (long) (index - graph->nodeCount), (long) readCount);
+
+                           reads = graph->nodeReads[index];
+                           for (readIndex = 0; readIndex < readCount;
+                                readIndex++)
+                                   velvetFprintf(mystream, "%ld\t%lld\t%d\n",
+                                        (long) reads[readIndex].readID,
+                                        (long long) reads[readIndex].position,
+                                        (int) reads[readIndex].offset);
+                        }
+                        { 
+                            fclose (mystream); 
+                            if (bufsize > 0) { 
+                               fprintf(outfile,"%s", buf); 
+                            } 
+                            bufsize = 0; 
+                            free(buf); 
+                        }
+                }
+        }
+
+        fclose(outfile);
+}
+
+void exportGraph(char *filename, Graph * graph, TightString * sequences)
+{    // this called at end,  makes "Graph2"  and "LastGraph"
+
+
+        #define PARALLEL_EXPORTGRAPH 1
+        #if  PARALLEL_EXPORTGRAPH 
+        velvetLog(" -----calling exportGraphPARALLEL !!!  \n");
+        exportGraphPARALLEL(filename, graph, sequences); 
+        velvetLog(" -----back from  exportGraphPARALLEL !!!  \n");
+        return;
+        #else
+        velvetLog(" -----calling exportGraphSERIAL   !!!  \n");
+        // orignial code exportGraph() renamed to exportGraphSERIAL()
+        exportGraphSERIAL(filename, graph, sequences); 
+        velvetLog(" -----back from exportGraphSERIAL   !!!  \n");
+        return;
+        #endif
+
+}
+
 
 Graph *importGraph(char *filename)
 {

@@ -18,6 +18,8 @@ Copyright 2010 Daniel Zerbino (zerbino@ebi.ac.uk)
     Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 */
+#include <omp.h>
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -31,6 +33,9 @@ Copyright 2010 Daniel Zerbino (zerbino@ebi.ac.uk)
 #include "recycleBin.h"
 #include "utility.h"
 #include "kmer.h"
+
+#if 0
+//pkr - moved to   .h file
 
 // Internal structure used to mark the ends of an Annotation
 struct kmerOccurence_st {
@@ -49,6 +54,9 @@ struct kmerOccurenceTable_st {
 	short int accelerationShift;
 	short int accelerationBits;
 };
+#else
+#include "kmerOccurenceTable.h"
+#endif
 
 int compareKmerOccurences(void const *A, void const *B)
 {
@@ -135,11 +143,54 @@ void allocateKmerOccurences(IDnum kmerCount, KmerOccurenceTable * table) {
 	table->kmerTableSize = kmerCount;
 	table->kmerOccurencePtr = kmerOccurences;
 	table->kmerOccurenceIndex = 0;
+
+        printf( " allocateKmerOccurences:   %x size:%x \n", kmerOccurences, sizeof(KmerOccurence));
 }
 
+
+
+void fast_recordKmerOccurence(Kmer * kmer, IDnum nodeID, Coordinate position, KmerOccurenceTable * table ) {
+	KmerOccurence *kmerOccurence ;
+        
+        // critical section in recordKmerOccurance should be named, but it still does not scale, 
+        // as XADDQ instruction is not generated. Change to use "#pragma omp atomic capture" 
+        // which generates the XADDQ instruction for the "fetch_and_add" atomic capability. 
+        // tested with : gcc version 4.7.2 20121015 (Red Hat 4.7.2-5) (GCC)
+        //
+        //  table->kmerOccurenceIndex is not necessary, and is defeated.
+
+        #pragma omp atomic capture
+        kmerOccurence =  table->kmerOccurencePtr++;
+        #pragma omp atomic
+        table->kmerOccurenceIndex++;
+
+//printf(" fast_recordKmerOccurence: nodeID:%d pos:%d \n", nodeID, position);
+
+        #if 0  // needed this for debugging
+           IDnum  nnn;
+           #pragma omp atomic capture
+           nnn=table->kmerOccurenceIndex++;
+        #endif
+	
+	copyKmers(&(kmerOccurence->kmer), kmer);
+	kmerOccurence->nodeID = nodeID;
+	kmerOccurence->position = position;
+
+         #if 0
+         int64_t i;
+         for ( i = 1;i< nnn - 1; i++)  {
+               if (kmerOccurence[i].nodeID == nodeID)  printf( "  %ld duplicate nodeID:%d  \n", i,nodeID );
+         }
+         #endif
+
+}
+
+
 void recordKmerOccurence(Kmer * kmer, IDnum nodeID, Coordinate position, KmerOccurenceTable * table) {
+
 	KmerOccurence * kmerOccurence;
 
+    
 #ifdef _OPENMP
 	#pragma omp critical
 #endif 
@@ -151,8 +202,8 @@ void recordKmerOccurence(Kmer * kmer, IDnum nodeID, Coordinate position, KmerOcc
 	copyKmers(&(kmerOccurence->kmer), kmer);
 	kmerOccurence->nodeID = nodeID;
 	kmerOccurence->position = position;
-
 }
+
 
 void sortKmerOccurenceTable(KmerOccurenceTable * table) {
 	KmerKey lastHeader = 0;

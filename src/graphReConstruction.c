@@ -19,8 +19,9 @@ Copyright 2007, 2008 Daniel Zerbino (zerbino@ebi.ac.uk)
 
 */
 
-#include <stdlib.h>
+#define _GNU_SOURCE
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <limits.h>
 #include <sys/time.h>
@@ -475,18 +476,23 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 	Kmer word;
 	Kmer antiWord;
 	KmerOccurenceTable *kmerTable;
+	KmerOccurenceTable *kmerTablexxx;  //debug
 	IDnum index;
 	IDnum nodeID = 0;
 	Nucleotide nucleotide;
 	NodeMask * nodeMask = nodeMasks; 
 	Coordinate nodeMaskIndex = 0;
 
+        int debug = 0;
+
 	if (file == NULL)
 		exitErrorf(EXIT_FAILURE, true, "Could not open %s", preGraphFilename);
 
+           
 	// Count kmers
 	velvetLog("Scanning pre-graph file %s for k-mers\n",
 		  preGraphFilename);
+
 
 	// First  line
 	if (!fgets(line, maxline, file))
@@ -495,10 +501,16 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 
 	kmerTable = newKmerOccurenceTable(accelerationBits, wordLength);
 
+	if(0) kmerTablexxx = newKmerOccurenceTable(accelerationBits, wordLength);  // debug
+
 	// Read nodes
 	if (!fgets(line, maxline, file))
 		exitErrorf(EXIT_FAILURE, true, "PreGraph file incomplete");
 	kmerCount = 0;
+
+//#define PARALLEL_KMERCOUNT
+        #ifndef PARALLEL_KMERCOUNT
+	// original code 
 	while (line[0] == 'N') {
 		lineLength = 0;
 		while ((c = getc(file)) != EOF && c != '\n')
@@ -507,20 +519,98 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 		if (fgets(line, maxline, file) == NULL)
 			break;
 	}
-
 	velvetLog("%li kmers found\n", (long) kmerCount);
 
-	for(nodeMaskIndex = 0; nodeMaskIndex < nodeMaskCount; nodeMaskIndex++) {
-		kmerCount -= nodeMasks[nodeMaskIndex].finish -
-nodeMasks[nodeMaskIndex].start;
-	}
+        #else
+               // determine size of input file
+               fseek(file,0L, SEEK_END);
+               off_t fsize = ftell(file);
+               //velvetLog(" input file size: %s bytes: %d\n",preGraphFilename,fsize);
+               (void) fseek(file, 0L, SEEK_SET);   // position at begining
+               int numThreads = omp_get_num_threads();
 
-	nodeMaskIndex = 0;
+		//  split file into partitions, count kmerCount in each task, 
+		//  with reduction at the end for the total kmerCount
+               kmerCount = 0;
+	       int itask=0;
 
-	fclose(file);
+	       #pragma omp parallel
+	       {
+		  int numThreads = omp_get_num_threads(); // obeys OMP_NUM_THREADS env variable
+		  int ntask = numThreads * 1;   // use higher factor for better loadbalancing
 
-	// Create table
-	allocateKmerOccurences(kmerCount, kmerTable);
+		  #pragma omp single
+		  {
+		     int i;
+		     for(i=0;i< ntask; i++) {
+		       #pragma omp task
+		       {
+			  FILE *t_file =  fopen(preGraphFilename, "r");
+			  if (t_file == NULL)  exit(EXIT_FAILURE);
+			  int my_itask;
+			  #pragma omp atomic capture
+                             my_itask=itask++; 
+			  
+			  // ibeg and iend are byte offesets into the file for each partition
+                          // should fix for rounding/truncation, and examine getline return codes
+			  ssize_t ibeg = (fsize/ntask) * my_itask; 
+			  ssize_t iend = (fsize/ntask) * (my_itask+1);
+			  ssize_t filePoint = ibeg;
+			  char *line = NULL;
+			  size_t bufsize; 
+			  ssize_t len = 0;
+			  ssize_t ssumt = 0;
+
+			  fseek(t_file, ibeg, SEEK_SET);  //positon to begining of partition
+
+			  if(my_itask==0) {  // skip first line if first task
+			     len = getline(&line, &bufsize, t_file); filePoint += (len ); 
+                             if (len == -1)  exitErrorf(EXIT_FAILURE, true, "PreGraph file incomplete");
+			  }
+			  while (filePoint < iend ) {  // this code assumes node/kmer records occur in pairs
+			     len = getline(&line, &bufsize, t_file); filePoint += (len ); 
+                             if (len == -1)  exitErrorf(EXIT_FAILURE, true, "PreGraph file incomplete");
+
+			     if (line[0] == 'N') {
+                                int xlineLength = 0;
+				len = getline(&line, &bufsize, t_file); filePoint += (len ); 
+                                if (len == -1)  exitErrorf(EXIT_FAILURE, true, "PreGraph file incomplete");
+                                ssumt += ( len - 1)  - wordLength + 1;
+			     }
+			  }
+			  if (line) free(line);
+			  close(t_file);
+                          #pragma omp atomic update
+			  kmerCount += ssumt;
+		       } // closing bracket: omp task
+		     } // closing bracket: for  
+		  } // closing bracket: omp single
+                  #pragma omp taskwait
+	       } // closing bracket: omp parallel
+
+	       velvetLog("%li kmers found\n", (long) kmerCount);
+
+	 #endif
+
+	       for(nodeMaskIndex = 0; nodeMaskIndex < nodeMaskCount; nodeMaskIndex++) {
+		       kmerCount -= nodeMasks[nodeMaskIndex].finish -
+			       nodeMasks[nodeMaskIndex].start;
+	       }
+	       nodeMaskIndex = 0;
+	       fclose(file);
+
+	       // Create table
+	       allocateKmerOccurences(kmerCount + 1, kmerTable);  // added 1 for comfort, otherwise getting SEGV in the FILLTABLE code
+
+	       //if(1) allocateKmerOccurences(kmerCount + 1, kmerTablexxx);  // added 1 for comfort, otherwise getting SEGV in the FILLTABLE code
+
+
+	       // Fill table
+
+//#define PARALLEL_FILLTABLE
+#ifndef PARALLEL_FILLTABLE
+
+        // this is the original code
 
 	// Fill table
 	file = fopen(preGraphFilename, "r");
@@ -531,6 +621,7 @@ nodeMasks[nodeMaskIndex].start;
 		exitErrorf(EXIT_FAILURE, true, "PreGraph file incomplete");
 
 	// Read nodes
+	
 	if (!fgets(line, maxline, file))
 		exitErrorf(EXIT_FAILURE, true, "PreGraph file incomplete");
 	while (line[0] == 'N') {
@@ -620,10 +711,303 @@ nodeMasks[nodeMaskIndex].start;
 	}
 
 	fclose(file);
+        fprintf(stdout,"  kmerOccuranceIndex:%d \n", kmerTable->kmerOccurenceIndex);
+               velvetLog(" --- done serial fill table \n");
+
+        {
+            velvetLog("  --- comparing tables\n");
+            long i;
+            KmerOccurence * kmerOccurence = kmerTable->kmerTable;
+            printf(" kmerCount: %ld \n", kmerCount);
+            for (i = 0;i< 20;i++ ) {
+                fprintf(stdout,"  %d  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
+                kmerOccurence++;
+            }
+        }
+
+#else
+            {
+               velvetLog(" --- using parallel fill table \n");
+               int itask = 0;
+               int64_t xnn=0;
+
+	       FILE *file = fopen(preGraphFilename, "r");
+               fseek(file,0L, SEEK_END);
+               long fsize = ftell(file);
+               velvetLog(" input file size: %s bytes: %d\n",preGraphFilename,fsize);
+               (void) fseek(file, 0L, SEEK_SET);   // position at begining
+               fclose(file);
+
+               #pragma omp parallel
+	       {
+                  int numThreads = omp_get_num_threads();
+                  int ntask;
+                  if (fsize >  100000)   // only split if file is big
+                      ntask = numThreads * 1; // number of tasks to use, higher for load balancing
+                  else
+                      ntask = 1;
+
+
+                  #pragma omp single
+		  {
+                     velvetLog(" --- using ntasks:%d\n", ntask);
+		     long i ;
+                     long *partitionTable =  malloc( (ntask+2)  * sizeof( long) ); // need to free
+                     long ppp[100];
+
+                     for (i=0;i< ntask ; i++) {
+                           partitionTable[i] =  (fsize/ntask) * (i+1);
+                           ppp[i] = (fsize/ntask) * (i+1);
+                     }
+                     partitionTable[ntask-1] = fsize ; // insure last partition is max fsize
+                     ppp[ntask-1] = fsize ; // insure last partition is max fsize
+
+//for debug
+#if 1
+                     for (i=0;i< ntask ; i++) {
+                           printf("     partition:%d  %ld  %ld\n", i, partitionTable[i], fsize);
+                     }
+                     for (i=0;i< ntask ; i++) {
+                           printf("     ppp:%d  %ld  %ld\n", i, ppp[i], fsize);
+                     }
+#endif
+
+
+		     for (i=0;i< ntask; i++) {
+                       #pragma omp task
+		       {
+	                  FILE *t_file = fopen(preGraphFilename, "r");
+	                  if (t_file == NULL)
+		              exitErrorf(EXIT_FAILURE, true, "Could not open %s", preGraphFilename);
+
+			   long my_itask;
+
+                           #pragma omp atomic capture
+                              my_itask=itask++; 
+
+                           //velvetLog(" T%ld ... opened %s \n",my_itask,preGraphFilename);
+
+                           char c;
+			   Kmer word; 
+                           Kmer antiWord; 
+                           IDnum index; 
+                           IDnum nodeID = 0;
+
+			   Nucleotide nucleotide;
+			   NodeMask * nodeMask = nodeMasks;
+                           Coordinate nodeMaskIndex = 0;
+
+
+			   // ibeg and iend are byte offesets into the file for each partition
+                           long ibeg =0; 
+                           //if (my_itask > 0) ibeg = partitionTable[my_itask-1] ;
+                           //long iend = partitionTable[my_itask];
+                           if (my_itask > 0) ibeg = ppp[my_itask-1] ;
+                           long iend = ppp[my_itask];
+
+                           //fprintf(stdout," T%ld  ibeg,iend %ld, %ld \n",my_itask,ibeg, iend);
+                           //if (my_itask > 0) fprintf(stdout," T%ld  ps,pe %ld, %ld   %ld,%ld\n",my_itask, partitionTable[my_itask-1],partitionTable[my_itask], ibeg, iend);
+                           if (my_itask > 0) fprintf(stdout," T%ld  ps,pe %ld,%ld   %ld,%ld\n",my_itask, ppp[my_itask-1],ppp[my_itask], ibeg, iend);
+
+			   char *line = NULL;
+                           size_t bufsize; 
+                           
+                           long filePoint = ibeg;
+			   ssize_t len = 0;
+         
+                           fseek(t_file, ibeg, SEEK_SET);  // seek to beginging of partition
+                           len = getline(&line, &bufsize, t_file); filePoint += (len ); 
+                           if( len == -1) exitErrorf(EXIT_FAILURE, true, " T%ld PreGraph file reached end - A\n", my_itask);
+			   int cursor = 0;
+                           int flag = 1;
+
+		           while (1) {
+
+                              // testing for 'N' allows for skipping fist line and any fragment of line
+                              // that may exist at the begining of a partition
+			      if(line[0] == 'N')  {
+                                 //this code relys on the nodeid being in the PreGrpaph file
+			         //read nodeid from NODE record, skipping over the 4 chars "NODE"  
+                                 // scanf's are expensive, we do only once at the begining of 
+                                 // partition as the nodeID's are in sequence in the PreGraph file
+
+                                    #pragma omp atomic
+                                    xnn++;
+
+
+                                 if (flag == 1) { // at beginging, sscanf the nodeID
+                                    sscanf(line + 4, "%ld", &nodeID); 
+                                    flag = 0;
+                                 } else {
+                                    nodeID++;   // no need to scan, just increment
+                                 }
+                                 //printf("  nodeID:%d  \n",nodeID);
+                                    
+                                 len = getline(&line, &bufsize, t_file); filePoint += (len ); 
+				 if ( len == -1) exitErrorf(EXIT_FAILURE, true, " T%ld PreGraph file reached end - B\n", my_itask);
+                                 cursor=0;
+
+		                 // Fill in the initial word : 
+		                 clearKmer(&word);
+		                 clearKmer(&antiWord);
+      
+		                 for (index = 0; index < wordLength - 1; index++) {
+                                    c = line[cursor++];
+			            if (c == 'A') nucleotide = ADENINE;
+			            else if (c == 'C') nucleotide = CYTOSINE;
+			            else if (c == 'G') nucleotide = GUANINE;
+			            else if (c == 'T') nucleotide = THYMINE;
+			            else if (c == '\n') 
+				       exitErrorf(EXIT_FAILURE, true, "PreGraph file incomplete");
+			            else nucleotide = ADENINE;
+				
+			            pushNucleotide(&word, nucleotide);
+
+			            if (double_strand) {
+                                       #ifdef COLOR
+		                       reversePushNucleotide(&antiWord, nucleotide);
+                                       #else
+			               reversePushNucleotide(&antiWord, 3 - nucleotide);
+                                       #endif
+			            }
+		                 }
+		        
+		                 // Scan through node
+		                 index = 0;
+                                 while(  (c = line[cursor++]) != '\n'  && c != EOF )
+                                 {
+                                    if (c == 'A') nucleotide = ADENINE;
+                                    else if (c == 'C') nucleotide = CYTOSINE;
+			            else if (c == 'G') nucleotide = GUANINE;
+			            else if (c == 'T') nucleotide = THYMINE;
+			            else nucleotide = ADENINE;
+   
+			            pushNucleotide(&word, nucleotide);
+			            if (double_strand) {
+                                       #ifdef COLOR
+			               reversePushNucleotide(&antiWord, nucleotide);
+                                       #else
+			               reversePushNucleotide(&antiWord, 3 - nucleotide);
+                                       #endif
+			            }
+
+			            // Update mask if necessary 
+			            if (nodeMask) { 
+                                       // this code path has not been tested if PARALLEL_FILLTABLE defined
+                                       exitErrorf(EXIT_FAILURE, true, " nodeMask code path not tested ");
+
+				       if (nodeMask->nodeID < nodeID || (nodeMask->nodeID == nodeID && index >= nodeMask->finish)) {
+					  if (++nodeMaskIndex == nodeMaskCount) 
+					      nodeMask = NULL;
+					  else 
+					      nodeMask++;
+				       }
+				    }
+				    // Check if not masked!
+			            if (nodeMask) { 
+                                       // this code path has not been tested if PARALLEL_FILLTABLE defined
+				       if (nodeMask->nodeID == nodeID && index >= nodeMask->start && index < nodeMask->finish) {
+					  index++;
+					  continue;
+				       } 			
+				    }
+
+				    if (!double_strand || compareKmers(&word, &antiWord) <= 0)
+				       fast_recordKmerOccurence(&word, nodeID, index, kmerTablexxx);
+				    else
+				       fast_recordKmerOccurence(&antiWord, -nodeID, getNodeLength(getNodeInGraph(graph, nodeID)) - 1 - index, kmerTablexxx);
+				    index++;
+				 }
+
+	                      } // closing bracket: if(line[0] == 'N')
+
+			      if (filePoint > iend - 1) break;
+
+                              len = getline(&line, &bufsize, t_file); filePoint += (len );
+                              if (len == -1) break;
+
+                           } // closing bracket: while (1)
+              
+                           if (line) free(line);  
+	                   fclose(t_file);
+
+                        } // closig bracket: omp task
+                     } // closing bracket: for
+                     free(partitionTable);
+
+                  } // closing bracket: omp single
+                  #pragma omp taskwait
+               } // closing bracket: omp parallel
+               velvetLog("  --- xnn:%ld \n", xnn);
+
+            }
+        fprintf(stdout,"  kmerOccuranceIndex xxx :%d \n", kmerTablexxx->kmerOccurenceIndex);
+
+#endif
+        velvetLog("  --- done with fill table\n");
 
 	// Sort table
 	sortKmerOccurenceTable(kmerTable);
+        {
+            velvetLog("  --- after sort table kmerTable\n");
+            long i;
+            KmerOccurence * kmerOccurence = kmerTable->kmerTable;
+            printf(" kmerCount: %ld \n", kmerCount);
+            for (i = 0;i< 20;i++ ) {
+                fprintf(stdout,"  %d  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
+                kmerOccurence++;
+            }
+        }
 
+
+        if(0) {
+            velvetLog("  --- before sort table kmerTablexxx\n");
+            long i;
+            KmerOccurence * kmerOccurence = kmerTablexxx->kmerTable;
+            printf(" kmerCount: %ld \n", kmerCount);
+            for (i = 0;i< 20;i++ ) {
+                fprintf(stdout,"  %d  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
+                kmerOccurence++;
+            }
+        }
+	if(0) sortKmerOccurenceTable(kmerTablexxx);
+        if(0) {
+            velvetLog("  --- after sort table kmerTablexxx\n");
+            long i;
+            KmerOccurence * kmerOccurence = kmerTablexxx->kmerTable;
+            printf(" kmerCount: %ld \n", kmerCount);
+            for (i = 0;i< 20;i++ ) {
+                fprintf(stdout,"  %d  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
+                kmerOccurence++;
+            }
+        }
+
+        velvetLog("  --- done with sorts table\n");
+
+        if(0) { 
+            velvetLog("  --- comparing tables\n");
+            long i;
+            KmerOccurence * kmerOccurence = kmerTable->kmerTable;
+            KmerOccurence * kmerOccurencexxx = kmerTablexxx->kmerTable;
+            printf(" kmerCount: %ld \n", kmerCount);
+            for (i = 0;i< kmerCount + 1;i++ ) {
+                //fprintf(stdout,"  %d  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
+
+                if(kmerOccurence->nodeID != kmerOccurencexxx->nodeID ) printf("  %d  nodeid:%d xxxid:%d \n", i, kmerOccurence->nodeID,kmerOccurencexxx->nodeID );
+		if(kmerOccurence->position != kmerOccurencexxx->position ) printf("  %d  position:%d xxxposition:%d \n", i, kmerOccurence->position,kmerOccurencexxx->position );
+
+                if ( 0 != compareKmers(&(kmerOccurence->kmer), &(kmerOccurencexxx->kmer) ) ) {
+                    printf("  kmer not equal %d  nodeid:%d xxxid:%d \n", i, kmerOccurence->nodeID,kmerOccurencexxx->nodeID );
+                }
+                
+                kmerOccurence++;
+                kmerOccurencexxx++;
+	    }
+            velvetLog("  --- done with comparing tables\n");
+         }
+	
+        //if(1) return kmerTablexxx;
+        velvetLog("  --- using non-parallel constructed tables\n");
 	return kmerTable;
 }
 
@@ -968,6 +1352,7 @@ static void threadSequenceThroughGraph(TightString * tString,
 				if (previousNode) 
 					break;
 			}
+                        //printf(" T:%d  node:%d \n", omp_get_thread_num(), node);
 		}
 
 		// Increment positions
@@ -1045,8 +1430,14 @@ static void threadSequenceThroughGraph(TightString * tString,
 #ifdef _OPENMP
 				lockTwoNodes(node, previousNode);
 #endif
+
+#pragma omp critical (xx3)  // pkr test
+{
 				if (category != REFERENCE)
 					createArc(previousNode, node, graph);
+}
+
+
 #ifdef _OPENMP
 				unLockTwoNodes(node, previousNode);
 #endif

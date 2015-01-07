@@ -21,12 +21,33 @@ Copyright 2010 Daniel Zerbino (zerbino@ebi.ac.uk)
 #ifndef _KMEROCCURENCETABLE_H_
 #define _KMEROCCURENCETABLE_H_
 
+//pkr moved from kmerOccurenceTable.c  to here
+struct kmerOccurence_st {
+        IDnum position;
+        IDnum nodeID;
+        IDnum offset;
+        Kmer kmer;
+} ATTRIBUTE_PACKED;
+
+struct kmerOccurenceTable_st {
+        KmerOccurence *kmerTable;
+        KmerOccurence * kmerOccurencePtr;
+        IDnum *accelerationTable;
+        IDnum kmerTableSize;
+        IDnum kmerOccurenceIndex;
+        short int accelerationShift;
+        short int accelerationBits;
+};
+
+
 // Table operations
 KmerOccurenceTable * newKmerOccurenceTable(short int accelerationBits, int wordLength);
 
 void allocateKmerOccurences(IDnum kmerCount, KmerOccurenceTable * table);
 
-void recordKmerOccurence(Kmer * kmer, IDnum nodeID, Coordinate position, KmerOccurenceTable * table);
+void     recordKmerOccurence(Kmer * kmer, IDnum nodeID, Coordinate position, KmerOccurenceTable * table);
+void     fast_recordKmerOccurence(Kmer * kmer, IDnum nodeID, Coordinate position, KmerOccurenceTable * table);
+
 
 void sortKmerOccurenceTable(KmerOccurenceTable * table);
 
