@@ -30,6 +30,8 @@ Copyright 2007, 2008 Daniel Zerbino (zerbino@ebi.ac.uk)
 #include "utility.h"
 #include "kmer.h"
 
+#include "defines.h"
+
 #define ADENINE 0
 #define CYTOSINE 1
 #define GUANINE 2
@@ -2025,6 +2027,7 @@ void exportGraphSERIAL(char *filename, Graph * graph, TightString * sequences)
 	fclose(outfile);
 }
 
+#if  PARALLEL_EXPORTGRAPH 
 // pkr added exportGraphPARALLEL, which is a clone of exportGraph, with 
 //      Node, Arc,    output into a memstream buffer to prevent intermixed,garbled 
 //      output when running under the omp loop
@@ -2173,23 +2176,23 @@ void exportGraphPARALLEL(char *filename, Graph * graph, TightString * sequences)
 
         fclose(outfile);
 }
+#endif
 
 void exportGraph(char *filename, Graph * graph, TightString * sequences)
 {    // this called at end,  makes "Graph2"  and "LastGraph"
 
 
-        #define PARALLEL_EXPORTGRAPH 1
         #if  PARALLEL_EXPORTGRAPH 
-        velvetLog(" -----calling exportGraphPARALLEL !!!  \n");
-        exportGraphPARALLEL(filename, graph, sequences); 
-        velvetLog(" -----back from  exportGraphPARALLEL !!!  \n");
-        return;
+           velvetLog(" -----calling exportGraphPARALLEL !!!  \n");
+           exportGraphPARALLEL(filename, graph, sequences); 
+           velvetLog(" -----back from  exportGraphPARALLEL !!!  \n");
+           return;
         #else
-        velvetLog(" -----calling exportGraphSERIAL   !!!  \n");
-        // orignial code exportGraph() renamed to exportGraphSERIAL()
-        exportGraphSERIAL(filename, graph, sequences); 
-        velvetLog(" -----back from exportGraphSERIAL   !!!  \n");
-        return;
+           velvetLog(" -----calling exportGraphSERIAL   !!!  \n");
+           // orignial code exportGraph() renamed to exportGraphSERIAL()
+           exportGraphSERIAL(filename, graph, sequences); 
+           velvetLog(" -----back from exportGraphSERIAL   !!!  \n");
+           return;
         #endif
 
 }

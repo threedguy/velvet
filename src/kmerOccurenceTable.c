@@ -34,6 +34,8 @@ Copyright 2010 Daniel Zerbino (zerbino@ebi.ac.uk)
 #include "utility.h"
 #include "kmer.h"
 
+#include "defines.h"
+
 #if 0
 //pkr - moved to   .h file
 
@@ -149,6 +151,7 @@ void allocateKmerOccurences(IDnum kmerCount, KmerOccurenceTable * table) {
 
 
 
+#if PARALLEL_KMER_FILLTABLE || TEST_KMERPARALLEL
 void fast_recordKmerOccurence(Kmer * kmer, IDnum nodeID, Coordinate position, KmerOccurenceTable * table ) {
 	KmerOccurence *kmerOccurence ;
         
@@ -184,6 +187,7 @@ void fast_recordKmerOccurence(Kmer * kmer, IDnum nodeID, Coordinate position, Km
          #endif
 
 }
+#endif
 
 
 void recordKmerOccurence(Kmer * kmer, IDnum nodeID, Coordinate position, KmerOccurenceTable * table) {

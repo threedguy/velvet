@@ -30,6 +30,7 @@ Copyright 2007, 2008 Daniel Zerbino (zerbino@ebi.ac.uk)
 #include <omp.h>
 #endif
 
+#include "defines.h"
 #include "globals.h"
 #include "graph.h"
 #include "passageMarker.h"
@@ -476,7 +477,10 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 	Kmer word;
 	Kmer antiWord;
 	KmerOccurenceTable *kmerTable;
-	KmerOccurenceTable *kmerTablexxx;  //debug
+	#if TEST_PARALLEL_KMER_FILLTABLE
+        KmerOccurenceTable *kmerTablePARALLEL;  //debug
+        #endif
+
 	IDnum index;
 	IDnum nodeID = 0;
 	Nucleotide nucleotide;
@@ -501,15 +505,16 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 
 	kmerTable = newKmerOccurenceTable(accelerationBits, wordLength);
 
-	if(0) kmerTablexxx = newKmerOccurenceTable(accelerationBits, wordLength);  // debug
+        #if TEST_PARALLEL_KMER_FILLTABLE
+	if(1) kmerTablePARALLEL = newKmerOccurenceTable(accelerationBits, wordLength);  // debug
+        #endif
 
 	// Read nodes
 	if (!fgets(line, maxline, file))
 		exitErrorf(EXIT_FAILURE, true, "PreGraph file incomplete");
 	kmerCount = 0;
 
-//#define PARALLEL_KMERCOUNT
-        #ifndef PARALLEL_KMERCOUNT
+        #if !PARALLEL_KMERCOUNT
 	// original code 
 	while (line[0] == 'N') {
 		lineLength = 0;
@@ -521,7 +526,8 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 	}
 	velvetLog("%li kmers found\n", (long) kmerCount);
 
-        #else
+        #else   // PARALLEL_KMERCOUNT
+               velvetLog(" doing parallel kmercount\n");
                // determine size of input file
                fseek(file,0L, SEEK_END);
                off_t fsize = ftell(file);
@@ -590,7 +596,7 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 
 	       velvetLog("%li kmers found\n", (long) kmerCount);
 
-	 #endif
+	 #endif   // PARALLEL_KMERCOUNT
 
 	       for(nodeMaskIndex = 0; nodeMaskIndex < nodeMaskCount; nodeMaskIndex++) {
 		       kmerCount -= nodeMasks[nodeMaskIndex].finish -
@@ -601,14 +607,18 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 
 	       // Create table
 	       allocateKmerOccurences(kmerCount + 1, kmerTable);  // added 1 for comfort, otherwise getting SEGV in the FILLTABLE code
+	       printf("   kmerTable:%x \n", kmerTable);
 
-	       //if(1) allocateKmerOccurences(kmerCount + 1, kmerTablexxx);  // added 1 for comfort, otherwise getting SEGV in the FILLTABLE code
+               #if TEST_PARALLEL_KMER_FILLTABLE
+	       if(1) allocateKmerOccurences(kmerCount + 1, kmerTablePARALLEL);  // added 1 for comfort, otherwise getting SEGV in the FILLTABLE code
+	       printf("   kmerTable:%x \n", kmerTablePARALLEL);
+	       #endif
+
 
 
 	       // Fill table
 
-//#define PARALLEL_FILLTABLE
-#ifndef PARALLEL_FILLTABLE
+#if  !PARALLEL_KMER_FILLTABLE  || TEST_PARALLEL_KMER_FILLTABLE
 
         // this is the original code
 
@@ -714,18 +724,22 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
         fprintf(stdout,"  kmerOccuranceIndex:%d \n", kmerTable->kmerOccurenceIndex);
                velvetLog(" --- done serial fill table \n");
 
+        #if TEST_PARALLEL_KMER_FILLTABLE
         {
             velvetLog("  --- comparing tables\n");
             long i;
             KmerOccurence * kmerOccurence = kmerTable->kmerTable;
             printf(" kmerCount: %ld \n", kmerCount);
             for (i = 0;i< 20;i++ ) {
-                fprintf(stdout,"  %d  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
+                fprintf(stdout,"  %ld  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
                 kmerOccurence++;
             }
         }
+        #endif
 
-#else
+#endif   // !PARALLEL_KMER_FILLTABLE !! TEST_PARALLEL_KMER_FILLTABLE
+
+#if PARALLEL_KMER_FILLTABLE || TEST_PARALLEL_KMER_FILLTABLE
             {
                velvetLog(" --- using parallel fill table \n");
                int itask = 0;
@@ -762,15 +776,15 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
                      partitionTable[ntask-1] = fsize ; // insure last partition is max fsize
                      ppp[ntask-1] = fsize ; // insure last partition is max fsize
 
-//for debug
-#if 1
+                     //for debug
+                     #if DEBUG
                      for (i=0;i< ntask ; i++) {
                            printf("     partition:%d  %ld  %ld\n", i, partitionTable[i], fsize);
                      }
                      for (i=0;i< ntask ; i++) {
                            printf("     ppp:%d  %ld  %ld\n", i, ppp[i], fsize);
                      }
-#endif
+                     #endif
 
 
 		     for (i=0;i< ntask; i++) {
@@ -807,7 +821,7 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 
                            //fprintf(stdout," T%ld  ibeg,iend %ld, %ld \n",my_itask,ibeg, iend);
                            //if (my_itask > 0) fprintf(stdout," T%ld  ps,pe %ld, %ld   %ld,%ld\n",my_itask, partitionTable[my_itask-1],partitionTable[my_itask], ibeg, iend);
-                           if (my_itask > 0) fprintf(stdout," T%ld  ps,pe %ld,%ld   %ld,%ld\n",my_itask, ppp[my_itask-1],ppp[my_itask], ibeg, iend);
+                           //if (my_itask > 0) fprintf(stdout," T%ld  ps,pe %ld,%ld   %ld,%ld\n",my_itask, ppp[my_itask-1],ppp[my_itask], ibeg, iend);
 
 			   char *line = NULL;
                            size_t bufsize; 
@@ -893,7 +907,7 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 
 			            // Update mask if necessary 
 			            if (nodeMask) { 
-                                       // this code path has not been tested if PARALLEL_FILLTABLE defined
+                                       // this code path has not been tested if PARALLEL_KMER_FILLTABLE defined
                                        exitErrorf(EXIT_FAILURE, true, " nodeMask code path not tested ");
 
 				       if (nodeMask->nodeID < nodeID || (nodeMask->nodeID == nodeID && index >= nodeMask->finish)) {
@@ -905,17 +919,25 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 				    }
 				    // Check if not masked!
 			            if (nodeMask) { 
-                                       // this code path has not been tested if PARALLEL_FILLTABLE defined
+                                       // this code path has not been tested if PARALLEL_KMER_FILLTABLE defined
 				       if (nodeMask->nodeID == nodeID && index >= nodeMask->start && index < nodeMask->finish) {
 					  index++;
 					  continue;
 				       } 			
 				    }
 
+                                    #if !TEST_PARALLEL_KMER_FILLTABLE
 				    if (!double_strand || compareKmers(&word, &antiWord) <= 0)
-				       fast_recordKmerOccurence(&word, nodeID, index, kmerTablexxx);
+				       fast_recordKmerOccurence(&word, nodeID, index, kmerTable);
 				    else
-				       fast_recordKmerOccurence(&antiWord, -nodeID, getNodeLength(getNodeInGraph(graph, nodeID)) - 1 - index, kmerTablexxx);
+				       fast_recordKmerOccurence(&antiWord, -nodeID, getNodeLength(getNodeInGraph(graph, nodeID)) - 1 - index, kmerTable);
+                                    #else 
+				    if (!double_strand || compareKmers(&word, &antiWord) <= 0)
+				       fast_recordKmerOccurence(&word, nodeID, index, kmerTablePARALLEL);
+				    else
+				       fast_recordKmerOccurence(&antiWord, -nodeID, getNodeLength(getNodeInGraph(graph, nodeID)) - 1 - index, kmerTablePARALLEL);
+                                    #endif
+
 				    index++;
 				 }
 
@@ -941,73 +963,87 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
                velvetLog("  --- xnn:%ld \n", xnn);
 
             }
-        fprintf(stdout,"  kmerOccuranceIndex xxx :%d \n", kmerTablexxx->kmerOccurenceIndex);
+        fprintf(stdout,"  kmerOccuranceIndex   :%d \n", kmerTable->kmerOccurenceIndex);
+        #if TEST_PARALLEL_KMER_FILLTABLE
+        fprintf(stdout,"  kmerOccuranceIndex PARALLEL  :%d \n", kmerTablePARALLEL->kmerOccurenceIndex);
+        #endif
 
-#endif
+        velvetLog("  --- done with parallel fill table\n");
+#endif   // PARALLEL_KMER_FILLTABLE || kmerTablePARALLEL
+
         velvetLog("  --- done with fill table\n");
 
 	// Sort table
 	sortKmerOccurenceTable(kmerTable);
-        {
+        velvetLog("  --- done with sorts table\n");
+        if(0) {
             velvetLog("  --- after sort table kmerTable\n");
             long i;
             KmerOccurence * kmerOccurence = kmerTable->kmerTable;
             printf(" kmerCount: %ld \n", kmerCount);
             for (i = 0;i< 20;i++ ) {
-                fprintf(stdout,"  %d  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
+                fprintf(stdout,"  %ld  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
                 kmerOccurence++;
             }
         }
 
 
-        if(0) {
-            velvetLog("  --- before sort table kmerTablexxx\n");
+        #if TEST_PARALLEL_KMER_FILLTABLE
+        if(1) {
+            velvetLog("  --- before sort table kmerTablePARALLEL\n");
             long i;
-            KmerOccurence * kmerOccurence = kmerTablexxx->kmerTable;
+            KmerOccurence * kmerOccurence = kmerTablePARALLEL->kmerTable;
             printf(" kmerCount: %ld \n", kmerCount);
             for (i = 0;i< 20;i++ ) {
-                fprintf(stdout,"  %d  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
+                fprintf(stdout,"  %ld  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
                 kmerOccurence++;
             }
         }
-	if(0) sortKmerOccurenceTable(kmerTablexxx);
-        if(0) {
-            velvetLog("  --- after sort table kmerTablexxx\n");
+	if(1) sortKmerOccurenceTable(kmerTablePARALLEL);
+        if(1) {
+            velvetLog("  --- after sort table kmerTablePARALLEL\n");
             long i;
-            KmerOccurence * kmerOccurence = kmerTablexxx->kmerTable;
+            KmerOccurence * kmerOccurence = kmerTablePARALLEL->kmerTable;
             printf(" kmerCount: %ld \n", kmerCount);
             for (i = 0;i< 20;i++ ) {
-                fprintf(stdout,"  %d  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
+                fprintf(stdout,"  %ld  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
                 kmerOccurence++;
             }
         }
 
-        velvetLog("  --- done with sorts table\n");
-
-        if(0) { 
+        if(1) { 
             velvetLog("  --- comparing tables\n");
             long i;
+            long nerrors = 0;
             KmerOccurence * kmerOccurence = kmerTable->kmerTable;
-            KmerOccurence * kmerOccurencexxx = kmerTablexxx->kmerTable;
+            KmerOccurence * kmerOccurencePARALLEL = kmerTablePARALLEL->kmerTable;
             printf(" kmerCount: %ld \n", kmerCount);
             for (i = 0;i< kmerCount + 1;i++ ) {
                 //fprintf(stdout,"  %d  nodeid:%d position:%d \n", i, kmerOccurence->nodeID,kmerOccurence->position );
 
-                if(kmerOccurence->nodeID != kmerOccurencexxx->nodeID ) printf("  %d  nodeid:%d xxxid:%d \n", i, kmerOccurence->nodeID,kmerOccurencexxx->nodeID );
-		if(kmerOccurence->position != kmerOccurencexxx->position ) printf("  %d  position:%d xxxposition:%d \n", i, kmerOccurence->position,kmerOccurencexxx->position );
+                if(kmerOccurence->nodeID != kmerOccurencePARALLEL->nodeID ) printf("  %ld  nodeid:%d xxxid:%d \n", i, kmerOccurence->nodeID,kmerOccurencePARALLEL->nodeID );
+		if(kmerOccurence->position != kmerOccurencePARALLEL->position ) printf("  %ld  position:%d xxxposition:%d \n", i, kmerOccurence->position,kmerOccurencePARALLEL->position );
 
-                if ( 0 != compareKmers(&(kmerOccurence->kmer), &(kmerOccurencexxx->kmer) ) ) {
-                    printf("  kmer not equal %d  nodeid:%d xxxid:%d \n", i, kmerOccurence->nodeID,kmerOccurencexxx->nodeID );
+                if ( 0 != compareKmers(&(kmerOccurence->kmer), &(kmerOccurencePARALLEL->kmer) ) ) {
+                    printf("  kmer not equal %ld  nodeid:%d xxxid:%d \n", i, kmerOccurence->nodeID,kmerOccurencePARALLEL->nodeID );
+                    nerrors++;
                 }
                 
                 kmerOccurence++;
-                kmerOccurencexxx++;
+                kmerOccurencePARALLEL++;
 	    }
-            velvetLog("  --- done with comparing tables\n");
+	    velvetLog("  --- done with comparing tables  errors: %ld \n", nerrors);
          }
+         free(kmerTablePARALLEL);
+         #endif
 	
-        //if(1) return kmerTablexxx;
-        velvetLog("  --- using non-parallel constructed tables\n");
+        #if !PARALLEL_KMER_FILLTABLE || TEST_PARALLEL_KMER_FILLTABLE
+        velvetLog("  --- using serially constructed tables\n");
+        #endif
+        #if PARALLEL_KMER_FILLTABLE 
+        velvetLog("  --- using parallely  constructed tables\n");
+        #endif
+
 	return kmerTable;
 }
 
