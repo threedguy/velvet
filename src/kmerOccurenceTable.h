@@ -21,6 +21,8 @@ Copyright 2010 Daniel Zerbino (zerbino@ebi.ac.uk)
 #ifndef _KMEROCCURENCETABLE_H_
 #define _KMEROCCURENCETABLE_H_
 
+#include "defines.h"
+
 //pkr moved from kmerOccurenceTable.c  to here
 struct kmerOccurence_st {
         IDnum position;
@@ -46,7 +48,10 @@ KmerOccurenceTable * newKmerOccurenceTable(short int accelerationBits, int wordL
 void allocateKmerOccurences(IDnum kmerCount, KmerOccurenceTable * table);
 
 void     recordKmerOccurence(Kmer * kmer, IDnum nodeID, Coordinate position, KmerOccurenceTable * table);
+
+#if PARALLEL_KMER_FILLTABLE  ||  TEST_PARALLEL_KMER_FILLTABLE
 void     fast_recordKmerOccurence(Kmer * kmer, IDnum nodeID, Coordinate position, KmerOccurenceTable * table);
+#endif
 
 
 void sortKmerOccurenceTable(KmerOccurenceTable * table);
