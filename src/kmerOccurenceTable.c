@@ -151,7 +151,7 @@ void allocateKmerOccurences(IDnum kmerCount, KmerOccurenceTable * table) {
 
 
 
-#if PARALLEL_KMER_FILLTABLE  ||  TEST_PARALLEL_KMER_FILLTABLE
+#if PARALLEL_KMER_FILLTABLE || TEST_PARALLEL_KMER_FILLTABLE
 void fast_recordKmerOccurence(Kmer * kmer, IDnum nodeID, Coordinate position, KmerOccurenceTable * table ) {
 	KmerOccurence *kmerOccurence ;
         
