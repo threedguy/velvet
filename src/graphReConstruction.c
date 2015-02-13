@@ -479,7 +479,7 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 	KmerOccurenceTable *kmerTable;
 	#if TEST_PARALLEL_KMER_FILLTABLE
         KmerOccurenceTable *kmerTablePARALLEL;  //debug
-        #endif
+        #endif // TEST_PARALLEL_KMER_FILLTABLE
 
 	IDnum index;
 	IDnum nodeID = 0;
@@ -507,7 +507,7 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 
         #if TEST_PARALLEL_KMER_FILLTABLE
 	if(1) kmerTablePARALLEL = newKmerOccurenceTable(accelerationBits, wordLength);  // debug
-        #endif
+        #endif // TEST_PARALLEL_KMER_FILLTABLE
 
 	// Read nodes
 	if (!fgets(line, maxline, file))
@@ -612,7 +612,7 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
                #if TEST_PARALLEL_KMER_FILLTABLE
 	       if(1) allocateKmerOccurences(kmerCount + 1, kmerTablePARALLEL);  // added 1 for comfort, otherwise getting SEGV in the FILLTABLE code
 	       printf("   kmerTable:%x \n", kmerTablePARALLEL);
-	       #endif
+	       #endif // TEST_PARALLEL_KMER_FILLTABLE
 
 
 
@@ -931,12 +931,12 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 				       fast_recordKmerOccurence(&word, nodeID, index, kmerTable);
 				    else
 				       fast_recordKmerOccurence(&antiWord, -nodeID, getNodeLength(getNodeInGraph(graph, nodeID)) - 1 - index, kmerTable);
-                                    #else 
+                                    #else  // !TEST_PARALLEL_KMER_FILLTABLE
 				    if (!double_strand || compareKmers(&word, &antiWord) <= 0)
 				       fast_recordKmerOccurence(&word, nodeID, index, kmerTablePARALLEL);
 				    else
 				       fast_recordKmerOccurence(&antiWord, -nodeID, getNodeLength(getNodeInGraph(graph, nodeID)) - 1 - index, kmerTablePARALLEL);
-                                    #endif
+                                    #endif // !TEST_PARALLEL_KMER_FILLTABLE
 
 				    index++;
 				 }
@@ -1037,14 +1037,16 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
          free(kmerTablePARALLEL);
          #endif // TEST_PARALLEL_KMER_FILLTABLE
 	
-        #if !PARALLEL_KMER_FILLTABLE || TEST_PARALLEL_KMER_FILLTABLE
-        velvetLog("  --- using serially constructed tables\n");
-        #endif
-        #if PARALLEL_KMER_FILLTABLE 
-        velvetLog("  --- using parallely  constructed tables\n");
-        #endif
+         #if !PARALLEL_KMER_FILLTABLE || TEST_PARALLEL_KMER_FILLTABLE
+         velvetLog("  --- using serially constructed tables\n");
+         #endif // !PARALLEL_KMER_FILLTABLE || TEST_PARALLEL_KMER_FILLTABLE
 
-	return kmerTable;
+
+         #if PARALLEL_KMER_FILLTABLE 
+         velvetLog("  --- using parallely  constructed tables\n");
+         #endif // PARALLEL_KMER_FILLTABLE
+
+	 return kmerTable;
 }
 
 static void ghostThreadSequenceThroughGraph(TightString * tString,
