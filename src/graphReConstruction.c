@@ -735,7 +735,7 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
                 kmerOccurence++;
             }
         }
-        #endif
+        #endif  // TEST_PARALLEL_KMER_FILLTABLE
 
 #endif   // !PARALLEL_KMER_FILLTABLE !! TEST_PARALLEL_KMER_FILLTABLE
 
@@ -966,10 +966,10 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
         fprintf(stdout,"  kmerOccuranceIndex   :%d \n", kmerTable->kmerOccurenceIndex);
         #if TEST_PARALLEL_KMER_FILLTABLE
         fprintf(stdout,"  kmerOccuranceIndex PARALLEL  :%d \n", kmerTablePARALLEL->kmerOccurenceIndex);
-        #endif
+        #endif TEST_PARALLEL_KMER_FILLTABLE
 
         velvetLog("  --- done with parallel fill table\n");
-#endif   // PARALLEL_KMER_FILLTABLE || kmerTablePARALLEL
+#endif   // PARALLEL_KMER_FILLTABLE || TEST_PARALLEL_KMER_FILLTABLE
 
         velvetLog("  --- done with fill table\n");
 
@@ -1035,7 +1035,7 @@ static KmerOccurenceTable *referenceGraphKmers(char *preGraphFilename,
 	    velvetLog("  --- done with comparing tables  errors: %ld \n", nerrors);
          }
          free(kmerTablePARALLEL);
-         #endif
+         #endif // TEST_PARALLEL_KMER_FILLTABLE
 	
         #if !PARALLEL_KMER_FILLTABLE || TEST_PARALLEL_KMER_FILLTABLE
         velvetLog("  --- using serially constructed tables\n");
